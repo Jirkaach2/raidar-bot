@@ -1,0 +1,6 @@
+node_modules/
+.env
+# Runtime state & secrets (paired creds, devices, links)
+data/
+rustplus.config.json
+*.log

@@ -1,0 +1,8 @@
+# Auto-HTTPS reverse proxy for the Raidar bot.
+# 92.5.73.207.nip.io resolves to the VM's IP, so Caddy can obtain a real
+# Let's Encrypt certificate (no purchased domain needed). All HTTPS traffic
+# is proxied to the bot's local Express server on :3000.
+92.5.73.207.nip.io {
+	encode gzip
+	reverse_proxy localhost:3000
+}

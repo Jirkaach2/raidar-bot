@@ -1,0 +1,32 @@
+[Unit]
+Description=Raidar Discord Bot
+After=network-online.target
+Wants=network-online.target
+# Back off instead of hammering a tiny VM if it crash-loops.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/home/opc/raidar-bot
+ExecStart=/usr/bin/env node src/index.js
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+# Keep the bot from starving the whole VM (sshd/OS stay responsive).
+# The big killer on a ~0.5–1GB box is swap thrashing — forbid it so the bot
+# gets OOM-killed/restarted instead of dragging the whole VM down.
+MemoryHigh=200M
+MemoryMax=260M
+MemorySwapMax=0
+CPUQuota=60%
+CPUWeight=20
+Nice=10
+# Cap Node heap so it fails fast instead of swap-thrashing.
+Environment=NODE_OPTIONS=--max-old-space-size=160
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Caddy (HTTPS reverse proxy for Raidar bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+Restart=on-failure
+RestartSec=5
+# Runs as root so it can bind 80/443 and write certs to /root/.local/share/caddy
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
