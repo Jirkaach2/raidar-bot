@@ -1,4 +1,5 @@
 'use strict';
+const path = require('path');
 const express = require('express');
 const { EmbedBuilder } = require('discord.js');
 const { config } = require('./config');
@@ -72,7 +73,20 @@ function start() {
 
   app.get('/health', (_req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.json({ ok: true });
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    const mem = process.memoryUsage();
+    res.json({
+      ok: true,
+      uptime: Math.floor(process.uptime()),
+      memory: {
+        rss: Math.round(mem.rss / 1024 / 1024),
+        heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+        heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+      },
+      version: process.env.npm_package_version || (() => { try { return require(path.resolve(__dirname, '../package.json')).version; } catch { return 'unknown'; } })(),
+      nodeVersion: process.version,
+      timestamp: new Date().toISOString(),
+    });
   });
 
   app.post('/api/link', (req, res) => {
