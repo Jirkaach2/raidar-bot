@@ -25,8 +25,6 @@ CPUWeight=20
 Nice=10
 # Cap Node heap so it fails fast instead of swap-thrashing.
 Environment=NODE_OPTIONS=--max-old-space-size=200
-# Kill and restart the service if it hangs for 60s without a watchdog ping.
-WatchdogSec=60
 StandardOutput=journal
 StandardError=journal
 
