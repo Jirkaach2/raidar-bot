@@ -70,7 +70,10 @@ function start() {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/health', (_req, res) => res.json({ ok: true }));
+  app.get('/health', (_req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ ok: true });
+  });
 
   app.post('/api/link', (req, res) => {
     const { code, credentials, server, devices } = req.body || {};
