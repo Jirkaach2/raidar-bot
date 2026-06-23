@@ -6,7 +6,7 @@
 # Install (done automatically by provision.sh):
 #   sudo cp /home/opc/raidar-bot/deploy/watchdog.sh /usr/local/bin/raidar-watchdog.sh
 #   sudo chmod +x /usr/local/bin/raidar-watchdog.sh
-#   (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/raidar-watchdog.sh >> /var/log/raidar-watchdog.log 2>&1") | crontab -
+#   (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/raidar-watchdog.sh >> /home/opc/raidar-watchdog.log 2>&1") | crontab -
 
 SERVICE="raidar-bot"
 HEALTH_PORT="${PAIRING_PORT:-3000}"

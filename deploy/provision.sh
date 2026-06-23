@@ -40,8 +40,14 @@ if [ -f "$WATCHDOG_SRC" ]; then
   sudo chmod +x /usr/local/bin/raidar-watchdog.sh
   # Drop any previous raidar-watchdog entry (e.g. the old */5) and install the
   # every-minute schedule so a down bot recovers within ~60s, not ~5 min.
-  CRON_LINE="* * * * * /usr/local/bin/raidar-watchdog.sh >> /var/log/raidar-watchdog.log 2>&1"
-  CURRENT="$(crontab -l 2>/dev/null | grep -v 'raidar-watchdog')"
-  printf '%s\n%s\n' "$CURRENT" "$CRON_LINE" | grep -v '^$' | crontab -
+  # Log to opc's HOME — /var/log is root-owned, so a redirect there fails for
+  # the opc crontab and silently prevents the watchdog from EVER running.
+  LOG_FILE="/home/opc/raidar-watchdog.log"
+  CRON_LINE="* * * * * /usr/local/bin/raidar-watchdog.sh >> ${LOG_FILE} 2>&1"
+  # NOTE: `|| true` on the greps is required under `set -e` — grep exits 1 when
+  # it filters out the only (watchdog) line, which would otherwise abort the
+  # whole script and skip the systemd steps that follow in deploy.ps1.
+  CURRENT="$(crontab -l 2>/dev/null | grep -v 'raidar-watchdog' || true)"
+  { printf '%s\n' "$CURRENT"; printf '%s\n' "$CRON_LINE"; } | grep -v '^[[:space:]]*$' | crontab - || true
   echo "==> Watchdog cron installed (runs every minute)."
 fi
