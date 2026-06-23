@@ -32,17 +32,16 @@ fi
 
 echo "node $(node --version) / npm $(npm --version)"
 
-# 3) Watchdog cron (restarts the bot if systemd gives up)
+# 3) Watchdog cron (restarts the bot if systemd gives up or it wedges)
 WATCHDOG_SRC="$(dirname "$0")/watchdog.sh"
 if [ -f "$WATCHDOG_SRC" ]; then
   echo "==> Installing raidar watchdog cron..."
   sudo cp "$WATCHDOG_SRC" /usr/local/bin/raidar-watchdog.sh
   sudo chmod +x /usr/local/bin/raidar-watchdog.sh
-  # Add only if not already present
-  if ! crontab -l 2>/dev/null | grep -q 'raidar-watchdog'; then
-    (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/raidar-watchdog.sh >> /var/log/raidar-watchdog.log 2>&1") | crontab -
-    echo "==> Watchdog cron installed (runs every 5 min)."
-  else
-    echo "==> Watchdog cron already present, skipping."
-  fi
+  # Drop any previous raidar-watchdog entry (e.g. the old */5) and install the
+  # every-minute schedule so a down bot recovers within ~60s, not ~5 min.
+  CRON_LINE="* * * * * /usr/local/bin/raidar-watchdog.sh >> /var/log/raidar-watchdog.log 2>&1"
+  CURRENT="$(crontab -l 2>/dev/null | grep -v 'raidar-watchdog')"
+  printf '%s\n%s\n' "$CURRENT" "$CRON_LINE" | grep -v '^$' | crontab -
+  echo "==> Watchdog cron installed (runs every minute)."
 fi

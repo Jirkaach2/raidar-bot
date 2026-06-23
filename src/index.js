@@ -1,5 +1,5 @@
 'use strict';
-const { Client, GatewayIntentBits, EmbedBuilder, Events, MessageFlags, ChannelType, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, Options, EmbedBuilder, Events, MessageFlags, ChannelType, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { config, assertReady } = require('./config');
 const { commands, handleControlButton, OWNER_ID, ACCENT, DANGER, FOOTER } = require('./commands');
 const { canControl } = require('./permissions');
@@ -9,7 +9,29 @@ const pairing = require('./pairing');
 const channels = require('./channels');
 
 const commandMap = new Map(commands.map((c) => [c.data.name, c]));
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+// Low-memory cache config. The bot runs on a tiny memory-capped VM (cgroup
+// MemoryMax), and routing notifications fetches channels/guilds which otherwise
+// cache members + users unbounded → slow RSS creep → OOM kill + restart. Cap
+// the caches that grow and sweep stale entries so RSS stays flat.
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+  makeCache: Options.cacheWithLimits({
+    ...Options.DefaultMakeCacheSettings,
+    MessageManager: 0,
+    ReactionManager: 0,
+    GuildMemberManager: { maxSize: 25, keepOverLimit: (m) => m.id === m.client.user.id },
+    UserManager: { maxSize: 50, keepOverLimit: (u) => u.id === u.client.user.id },
+    PresenceManager: 0,
+    ThreadManager: 0,
+  }),
+  sweepers: {
+    ...Options.DefaultSweeperSettings,
+    messages: { interval: 600, lifetime: 300 },
+    users: { interval: 3600, filter: () => (u) => u.id !== u.client.user.id },
+    guildMembers: { interval: 3600, filter: () => (m) => m.id !== m.client.user.id },
+    threads: { interval: 3600, lifetime: 1800 },
+  },
+});
 
 // Safety net: a malformed message from one odd/modded server must never take
 // down the whole multi-tenant bot. Log (rate-limited) and keep running.
@@ -152,6 +174,18 @@ client.once(Events.ClientReady, (c) => {
   pairing.setClient(c);
   manager.bootAll();
 });
+
+// Memory guardian: on the memory-capped VM the kernel cgroup OOM-kills node at
+// MemoryMax, which is abrupt and can crash-loop. Instead, watch RSS and exit
+// cleanly just BEFORE the cap so systemd restarts us in a known-good state.
+const RSS_LIMIT_MB = parseInt(process.env.RSS_LIMIT_MB || '300', 10);
+setInterval(() => {
+  const rssMb = process.memoryUsage().rss / 1024 / 1024;
+  if (rssMb > RSS_LIMIT_MB) {
+    console.error(`[mem] RSS ${Math.round(rssMb)}MB exceeded ${RSS_LIMIT_MB}MB — restarting cleanly before OOM.`);
+    process.exit(1);
+  }
+}, 30_000).unref();
 
 assertReady();
 pairing.start();
