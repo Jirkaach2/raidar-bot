@@ -24,8 +24,9 @@ const config = {
   controlRoleId: process.env.CONTROL_ROLE_ID || '',
   allowedUserIds: list(process.env.ALLOWED_USER_IDS),
 
-  // Pairing web server (Steam login → FCM credentials)
-  pairingPort: parseInt(process.env.PAIRING_PORT || '3000', 10),
+  // Pairing / API web server. Heroku injects $PORT and routes HTTPS to it; fall
+  // back to PAIRING_PORT (the VM/local convention) then 3000.
+  pairingPort: parseInt(process.env.PORT || process.env.PAIRING_PORT || '3000', 10),
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, ''), // e.g. https://bot.example.com
 
   paths: {

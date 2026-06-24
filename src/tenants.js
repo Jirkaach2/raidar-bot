@@ -1,6 +1,5 @@
 'use strict';
-const fs = require('fs');
-const { config } = require('./config');
+const store = require('./store');
 
 /**
  * Per-guild persistence for the public, multi-tenant bot. Each Discord guild
@@ -24,15 +23,18 @@ function emptyTenant() {
 
 let tenants = {};
 
-function load() {
-  try { tenants = JSON.parse(fs.readFileSync(config.paths.tenants, 'utf8')) || {}; }
-  catch { tenants = {}; }
+/**
+ * Load persisted tenants into memory. MUST be awaited during boot before the
+ * bot logs in or the HTTP API starts serving, so reads see the real data.
+ */
+async function init() {
+  await store.init();
+  tenants = await store.loadBlob();
+  return tenants;
 }
 function save() {
-  if (!fs.existsSync(config.dataDir)) fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(config.paths.tenants, JSON.stringify(tenants, null, 2), 'utf8');
+  store.saveBlob(tenants);
 }
-load();
 
 function get(guildId) {
   return tenants[guildId] || null;
@@ -74,6 +76,7 @@ function remove(guildId) {
 }
 
 module.exports = {
+  init,
   get, ensure, all, update, remove,
   setCredentials, setServer, setNotifyChannel,
   upsertDevice, removeDevice,

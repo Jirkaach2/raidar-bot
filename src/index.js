@@ -188,5 +188,15 @@ setInterval(() => {
 }, 30_000).unref();
 
 assertReady();
-pairing.start();
-client.login(config.token);
+
+// Boot order matters: load persisted tenants BEFORE the HTTP API starts serving
+// or the gateway logs in, so the very first /api/* request or notification sees
+// the real data (critical with the async Postgres backend on Heroku).
+(async () => {
+  await tenants.init();
+  pairing.start();
+  await client.login(config.token);
+})().catch((e) => {
+  console.error('[boot] fatal:', e && e.message ? e.message : e);
+  process.exit(1);
+});
