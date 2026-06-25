@@ -2,6 +2,7 @@
 const RustBridge = require('./rust');
 const tenants = require('./tenants');
 const { lookupPlayer } = require('./lookup');
+const { getGridCoordinate } = require('./grid');
 
 /**
  * Owns Rust+ connections per guild, with idle management:
@@ -38,6 +39,19 @@ function fmtGameTime(t) {
   const h = Math.floor(t.time || 0);
   const m = Math.floor(((t.time || 0) - h) * 60);
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** In-game time (h/m) until the next sunrise/sunset transition. */
+function untilTransition(t) {
+  const day = t.time >= t.sunrise && t.time < t.sunset;
+  let delta;
+  if (day) delta = t.sunset - t.time;
+  else if (t.time >= t.sunset) delta = (24 - t.time) + t.sunrise;
+  else delta = t.sunrise - t.time;
+  if (delta < 0) delta += 24;
+  const h = Math.floor(delta);
+  const m = Math.floor((delta - h) * 60);
+  return { day, next: day ? 'night' : 'day', h, m };
 }
 
 /** Short relative age (e.g. "2d 3h ago") from an epoch-seconds timestamp. */
@@ -143,6 +157,68 @@ class Manager {
             const info = await bridge.getInfo();
             const rel = info.wipeTime ? shortRelative(info.wipeTime) : 'unknown';
             await bridge.sendTeamMessage(`RAIDAR: last wipe ${rel}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!team') {
+            const team = await bridge.getTeamInfo();
+            const members = team.members || [];
+            const online = members.filter((mm) => mm.isOnline);
+            let names = online.map((mm) => mm.name).join(', ');
+            if (names.length > 80) names = names.slice(0, 79) + '…';
+            await bridge.sendTeamMessage(`RAIDAR: ${online.length}/${members.length} online${names ? ': ' + names : ''}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!cargo') {
+            const info = await bridge.getInfo();
+            const res = await bridge.getMapMarkers();
+            const cargo = (res.markers || []).find((mm) => mm.type === 5);
+            await bridge.sendTeamMessage(cargo ? `RAIDAR: cargo at ${getGridCoordinate(cargo.x, cargo.y, info.mapSize)}` : 'RAIDAR: no cargo on map').catch(() => {});
+            return;
+          }
+
+          if (token === '!heli') {
+            const info = await bridge.getInfo();
+            const res = await bridge.getMapMarkers();
+            const heli = (res.markers || []).find((mm) => mm.type === 8);
+            await bridge.sendTeamMessage(heli ? `RAIDAR: heli at ${getGridCoordinate(heli.x, heli.y, info.mapSize)}` : 'RAIDAR: no heli active').catch(() => {});
+            return;
+          }
+
+          if (token === '!events') {
+            const res = await bridge.getMapMarkers();
+            const markers = res.markers || [];
+            const cargo = markers.filter((mm) => mm.type === 5).length;
+            const heli = markers.filter((mm) => mm.type === 8).length;
+            const chinook = markers.filter((mm) => mm.type === 4).length;
+            const crate = markers.filter((mm) => mm.type === 6).length;
+            const parts = [];
+            if (cargo) parts.push(`cargo x${cargo}`);
+            if (heli) parts.push(`heli x${heli}`);
+            if (chinook) parts.push(`chinook x${chinook}`);
+            if (crate) parts.push(`crate x${crate}`);
+            await bridge.sendTeamMessage(`RAIDAR: ${parts.length ? parts.join(', ') : 'no active events'}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!sun') {
+            const tm = await bridge.getTime();
+            const u = untilTransition(tm);
+            await bridge.sendTeamMessage(`RAIDAR: ${u.h}h${u.m}m until ${u.next}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!status') {
+            const info = await bridge.getInfo();
+            const tm = await bridge.getTime();
+            const day = tm.time >= tm.sunrise && tm.time < tm.sunset;
+            await bridge.sendTeamMessage(`RAIDAR: ${info.players}/${info.maxPlayers} online · ${fmtGameTime(tm)} ${day ? 'day' : 'night'}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!help') {
+            await bridge.sendTeamMessage('RAIDAR: !check !pop !time !sun !wipe !team !cargo !heli !events !status').catch(() => {});
             return;
           }
         } catch (e) {

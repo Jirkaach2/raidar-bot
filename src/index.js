@@ -15,7 +15,9 @@ const commandMap = new Map(commands.map((c) => [c.data.name, c]));
 // cache members + users unbounded → slow RSS creep → OOM kill + restart. Cap
 // the caches that grow and sweep stale entries so RSS stays flat.
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  // GuildMembers is a privileged intent required by /api/members — it must be
+  // enabled as "Server Members Intent" in the Discord Developer Portal.
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
   makeCache: Options.cacheWithLimits({
     ...Options.DefaultMakeCacheSettings,
     MessageManager: 0,

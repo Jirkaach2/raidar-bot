@@ -10,6 +10,7 @@ const channels = require('./channels');
 const { canControl } = require('./permissions');
 const { getGridCoordinate } = require('./grid');
 const { lookupPlayer } = require('./lookup');
+const alerts = require('./alerts');
 
 const ACCENT = 0xce422b;
 const DANGER = 0xef4444;
@@ -39,6 +40,18 @@ function fmtTime(t) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 function isDay(t) { return t.time >= t.sunrise && t.time < t.sunset; }
+/** In-game time (h/m) until the next sunrise/sunset transition. */
+function untilNextTransition(t) {
+  const day = isDay(t);
+  let delta;
+  if (day) delta = t.sunset - t.time;
+  else if (t.time >= t.sunset) delta = (24 - t.time) + t.sunrise;
+  else delta = t.sunrise - t.time;
+  if (delta < 0) delta += 24;
+  const h = Math.floor(delta);
+  const m = Math.floor((delta - h) * 60);
+  return { day, next: day ? 'night' : 'day', h, m };
+}
 function trunc(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
 /**
@@ -55,7 +68,7 @@ function cheatRisk(p) {
   return 'LOW';
 }
 
-const MARKER_LABELS = { 5: '🚢 Cargo Ship', 8: '🚁 Patrol Heli', 4: '🛩️ Chinook', 6: '📦 Locked Crate', 2: '💥 Explosion', 3: '🛒 Vending' };
+const MARKER_LABELS = { 5: '🚢 Cargo Ship', 8: '🚁 Patrol Heli', 4: '🛩️ Chinook', 6: '📦 Locked Crate', 2: '💥 Explosion', 3: '🛒 Vending', 15: '🛒 Travelling Vendor' };
 const DEVICE_GROUPS = { 1: '🔌 Smart Switches', 2: '🚨 Smart Alarms', 3: '📦 Storage Monitors' };
 
 // ── Button-based device control ──────────────────────────
@@ -364,6 +377,49 @@ const commands = [
       await interaction.editReply({ embeds: [embed] });
     },
   },
+  {
+    data: new SlashCommandBuilder().setName('heli').setDescription('Patrol Heli & Chinook locations'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const bridge = await bridgeFor(interaction);
+      const info = await bridge.getInfo();
+      const res = await bridge.getMapMarkers();
+      const air = (res.markers || []).filter((m) => m.type === 8 || m.type === 4);
+      const embed = new EmbedBuilder().setColor(ACCENT).setAuthor({ name: '🚁  AIR EVENTS' }).setFooter(FOOTER).setTimestamp();
+      if (air.length === 0) { embed.setDescription('No air events active right now.'); return interaction.editReply({ embeds: [embed] }); }
+      embed.setDescription(air.map((m) => `${MARKER_LABELS[m.type]} → \`${getGridCoordinate(m.x, m.y, info.mapSize)}\``).join('\n'));
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
+  {
+    data: new SlashCommandBuilder().setName('sun').setDescription('Time until the next sunrise or sunset'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const t = await (await bridgeFor(interaction)).getTime();
+      const u = untilNextTransition(t);
+      const embed = new EmbedBuilder()
+        .setColor(u.day ? 0xf5a623 : 0x4b6cb8)
+        .setAuthor({ name: u.day ? '☀️  DAYTIME' : '🌙  NIGHTTIME' })
+        .setDescription(`# ${u.day ? '🌙' : '☀️'} ${u.h}h ${u.m}m\n-# until ${u.next === 'night' ? 'sunset 🌙' : 'sunrise ☀️'} · now ${fmtTime(t)}`)
+        .setFooter(FOOTER).setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
+  {
+    data: new SlashCommandBuilder().setName('vendor').setDescription('Travelling Vendor location'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const bridge = await bridgeFor(interaction);
+      const info = await bridge.getInfo();
+      const res = await bridge.getMapMarkers();
+      // Travelling vendor is marker type 15 on newer rustplus — may be absent on older servers.
+      const vendor = (res.markers || []).find((m) => m.type === 15);
+      const embed = new EmbedBuilder().setColor(ACCENT).setAuthor({ name: '🛒  TRAVELLING VENDOR' }).setFooter(FOOTER).setTimestamp();
+      if (vendor) embed.setDescription(`# 🛒 \`${getGridCoordinate(vendor.x, vendor.y, info.mapSize)}\`\n-# Travelling vendor location`);
+      else embed.setDescription('No travelling vendor on the map right now.');
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
 
   // ── Help ───────────────────────────────────────────────
   {
@@ -375,6 +431,9 @@ const commands = [
           ['/pop', 'Current population'],
           ['/time', 'In-game time and day/night'],
           ['/events', 'Live map events (cargo, heli, crates, chinook)'],
+          ['/heli', 'Patrol Heli & Chinook locations'],
+          ['/sun', 'Time until the next sunrise or sunset'],
+          ['/vendor', 'Travelling Vendor location'],
           ['/wipe', 'Last wipe time, map size and seed'],
           ['/cargo', 'Locate the cargo ship on the map'],
           ['/help', 'List all Raidar commands'],
@@ -404,7 +463,19 @@ const commands = [
       for (const g of groups) {
         embed.addFields({ name: g.name, value: g.cmds.map(([c, d]) => `**${c}** — ${d}`).join('\n'), inline: false });
       }
-      embed.addFields({ name: '💬 In-game team chat', value: ['**!check <steamid>** — player risk lookup', '**!pop** — players online', '**!time** — in-game time', '**!wipe** — last wipe'].join('\n'), inline: false });
+      embed.addFields({ name: '💬 In-game team chat', value: [
+        '**!check <steamid>** — player risk lookup',
+        '**!pop** — players online',
+        '**!time** — in-game time',
+        '**!sun** — time until day/night',
+        '**!wipe** — last wipe',
+        '**!team** — online teammates',
+        '**!cargo** — cargo ship grid',
+        '**!heli** — patrol heli grid',
+        '**!events** — active events',
+        '**!status** — population + time',
+        '**!help** — list chat commands',
+      ].join('\n'), inline: false });
       await interaction.reply({ embeds: [embed] });
     },
   },
@@ -489,11 +560,19 @@ const commands = [
       const targets = [...new Set([ch.alarms, ch.general, t && t.notifyChannelId].filter(Boolean))];
       if (targets.length === 0) return interaction.reply(ephemeral('No alert channel set yet. Run `/channels` or `/alarms here` first.'));
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const embed = new EmbedBuilder().setColor(0x6fcf73).setAuthor({ name: '✅  TEST NOTIFICATION' })
-        .setDescription('If you can see this, Raidar notifications are wired up correctly.').setFooter(FOOTER).setTimestamp();
+      // Showcase the real custom raid-alert format so users can SEE the notification.
+      const embed = alerts.buildAlertEmbed({
+        title: '🚨 RAID ALERT (TEST)',
+        targetEntity: 'Tool Cupboard',
+        grid: 'D7',
+        serverName: (t.server?.name) || 'Your Server',
+        triggerUnix: Math.floor(Date.now() / 1000),
+        description: '>>> This is a preview of how raid alerts appear.',
+      });
+      const buttons = alerts.buildAlertButtons(interaction.guildId);
       let sent = 0;
       for (const id of targets) {
-        try { const c = await interaction.client.channels.fetch(id); if (c && c.isTextBased()) { await c.send({ embeds: [embed] }); sent++; } } catch { /* ignore */ }
+        try { const c = await interaction.client.channels.fetch(id); if (c && c.isTextBased()) { await c.send({ embeds: [embed], components: [buttons] }); sent++; } } catch { /* ignore */ }
       }
       await interaction.editReply(`📨 Sent a test to **${sent}** channel${sent === 1 ? '' : 's'}.`);
     },

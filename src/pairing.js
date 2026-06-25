@@ -1,7 +1,7 @@
 'use strict';
 const path = require('path');
 const express = require('express');
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, PermissionsBitField } = require('discord.js');
 const { config } = require('./config');
 const link = require('./link');
 const tenants = require('./tenants');
@@ -201,6 +201,45 @@ function start() {
     const clean = Array.isArray(allowedUserIds) ? allowedUserIds.map(String).map((s) => s.trim()).filter((s) => /^\d{5,}$/.test(s)) : [];
     tenants.update(guildId, { allowedUserIds: clean });
     res.json({ ok: true, allowedUserIds: clean });
+  });
+
+  // List a linked guild's members so the app can show top-role members + search
+  // by name. Requires the privileged GuildMembers intent (see index.js). Fails
+  // soft with { ok:false } so the app falls back to raw user IDs gracefully.
+  app.post('/api/members', async (req, res) => {
+    const { authToken, guildId } = req.body || {};
+    if (!authToken || !guildId) return res.status(400).json({ error: 'Missing authToken or guildId.' });
+    const t = tenants.get(guildId);
+    if (!t || !t.credentials || t.credentials.rustplus_auth_token !== authToken) {
+      return res.status(403).json({ error: 'Not authorized.' });
+    }
+    try {
+      const guild = await discordClient.guilds.fetch(guildId);
+      const fetched = await guild.members.fetch();
+      const list = [];
+      for (const member of fetched.values()) {
+        if (member.user && member.user.bot) continue;
+        const isOwner = member.id === guild.ownerId;
+        const perms = member.permissions;
+        const isAdmin = !!(perms && (perms.has(PermissionsBitField.Flags.Administrator) || perms.has(PermissionsBitField.Flags.ManageGuild)));
+        const highest = member.roles.highest;
+        list.push({
+          id: member.id,
+          name: member.displayName || member.user.username,
+          roleName: (highest && highest.name) || '',
+          rolePos: (highest && highest.position) || 0,
+          isAdmin,
+          isOwner,
+        });
+      }
+      // Sort DESC by owner, then admin, then highest-role position.
+      list.sort((a, b) => (Number(b.isOwner) - Number(a.isOwner)) || (Number(b.isAdmin) - Number(a.isAdmin)) || (b.rolePos - a.rolePos));
+      const members = list.slice(0, 200).map((m) => ({ id: m.id, name: m.name, roleName: m.roleName, isAdmin: m.isAdmin, isOwner: m.isOwner }));
+      res.json({ ok: true, members, top: members.slice(0, 4) });
+    } catch {
+      // Intent not granted / fetch error → soft fail (HTTP 200) so the app copes.
+      res.json({ ok: false, error: 'members_unavailable' });
+    }
   });
 
   app.post('/api/unlink', (req, res) => {
