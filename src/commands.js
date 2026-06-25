@@ -333,6 +333,82 @@ const commands = [
     },
   },
 
+  // ── Wipe & cargo ───────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('wipe').setDescription('Last wipe time, map size and seed'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const info = await (await bridgeFor(interaction)).getInfo();
+      const embed = new EmbedBuilder()
+        .setColor(ACCENT).setAuthor({ name: '🧹  LAST WIPE' }).setTitle(info.name || 'Rust Server')
+        .setDescription(info.wipeTime ? `# 🧹 <t:${info.wipeTime}:R>\n-# Last map wipe` : '🧹 Last wipe time is unknown for this server.')
+        .addFields(
+          { name: '🗺️ Map Size', value: `\`${info.mapSize ?? '—'}m\``, inline: true },
+          { name: '🌱 Seed', value: `\`${info.seed ?? '—'}\``, inline: true },
+        )
+        .setFooter(FOOTER).setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
+  {
+    data: new SlashCommandBuilder().setName('cargo').setDescription('Locate the cargo ship on the map'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const bridge = await bridgeFor(interaction);
+      const info = await bridge.getInfo();
+      const res = await bridge.getMapMarkers();
+      const cargo = (res.markers || []).find((m) => m.type === 5);
+      const embed = new EmbedBuilder().setColor(ACCENT).setAuthor({ name: '🚢  CARGO SHIP' }).setFooter(FOOTER).setTimestamp();
+      if (cargo) embed.setDescription(`# 🚢 \`${getGridCoordinate(cargo.x, cargo.y, info.mapSize)}\`\n-# Cargo ship location`);
+      else embed.setDescription('No cargo ship currently on the map.');
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
+
+  // ── Help ───────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('help').setDescription('List all Raidar commands'),
+    async execute(interaction) {
+      const groups = [
+        { name: 'ℹ️ Info', cmds: [
+          ['/status', 'Server population, map and wipe info'],
+          ['/pop', 'Current population'],
+          ['/time', 'In-game time and day/night'],
+          ['/events', 'Live map events (cargo, heli, crates, chinook)'],
+          ['/wipe', 'Last wipe time, map size and seed'],
+          ['/cargo', 'Locate the cargo ship on the map'],
+          ['/help', 'List all Raidar commands'],
+        ] },
+        { name: '🎯 Player', cmds: [
+          ['/check', 'Look up a Rust player by SteamID64'],
+          ['/team', 'Team members, status and grid'],
+          ['/devices', 'List paired smart devices and their state'],
+        ] },
+        { name: '🎛️ Control', cmds: [
+          ['/control', 'Button panel to toggle Smart Switches (restricted)'],
+          ['/toggle', 'Turn a Smart Switch on or off (restricted)'],
+          ['/say', 'Send a message to in-game team chat (restricted)'],
+          ['/alarms', 'Set or clear this channel for notifications (restricted)'],
+        ] },
+        { name: '🔧 Setup', cmds: [
+          ['/link', 'Link this server from the Raidar app'],
+          ['/unlink', 'Disconnect this server and delete credentials'],
+          ['/channels', 'Create the Raidar section & channels (admin)'],
+          ['/test', 'Send a test notification to your alert channels'],
+        ] },
+      ];
+      const embed = new EmbedBuilder()
+        .setColor(ACCENT).setAuthor({ name: '📖  RAIDAR COMMANDS' })
+        .setDescription('Everything Raidar can do. Some control commands are restricted to allowed users.')
+        .setFooter(FOOTER).setTimestamp();
+      for (const g of groups) {
+        embed.addFields({ name: g.name, value: g.cmds.map(([c, d]) => `**${c}** — ${d}`).join('\n'), inline: false });
+      }
+      embed.addFields({ name: '💬 In-game team chat', value: ['**!check <steamid>** — player risk lookup', '**!pop** — players online', '**!time** — in-game time', '**!wipe** — last wipe'].join('\n'), inline: false });
+      await interaction.reply({ embeds: [embed] });
+    },
+  },
+
   // ── Convenient control panel (buttons) ─────────────────
   {
     data: new SlashCommandBuilder().setName('control').setDescription('Open a button panel to toggle Smart Switches (restricted)'),

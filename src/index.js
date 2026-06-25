@@ -7,6 +7,7 @@ const manager = require('./manager');
 const tenants = require('./tenants');
 const pairing = require('./pairing');
 const channels = require('./channels');
+const alerts = require('./alerts');
 
 const commandMap = new Map(commands.map((c) => [c.data.name, c]));
 // Low-memory cache config. The bot runs on a tiny memory-capped VM (cgroup
@@ -58,14 +59,19 @@ manager.onNotify = async (guildId, event) => {
   else channelId = ch.general || t.notifyChannelId || ch.alarms;
   if (!channelId) return;
   let embed;
+  let components;
   if (event.type === 'alarm') {
-    embed = new EmbedBuilder()
-      .setColor(0xef4444)
-      .setAuthor({ name: '🚨  SMART ALARM TRIGGERED' })
-      .setTitle(event.alarm.title || 'Alarm')
-      .setDescription(`## ⚠️ ${event.alarm.message}`)
-      .setFooter({ text: `${event.alarm.serverName || 'Raidar'} · Tactical Intelligence` })
-      .setTimestamp();
+    // Respect a per-guild mute window set via the "Mute 1 Hour" button.
+    if (tenants.isMuted(guildId)) return;
+    embed = alerts.buildAlertEmbed({
+      title: '🚨 RAID ALERT',
+      targetEntity: event.alarm.title || 'Smart Alarm',
+      grid: event.alarm.grid || '—',
+      serverName: event.alarm.serverName || 'Unknown',
+      triggerUnix: Math.floor(Date.now() / 1000),
+      description: event.alarm.message ? `## ⚠️ ${event.alarm.message}` : undefined,
+    });
+    components = [alerts.buildAlertButtons(guildId)];
   } else if (event.type === 'server') {
     embed = new EmbedBuilder()
       .setColor(0x6fcf73)
@@ -84,7 +90,7 @@ manager.onNotify = async (guildId, event) => {
 
   try {
     const channel = await client.channels.fetch(channelId);
-    if (channel && channel.isTextBased()) await channel.send({ embeds: [embed] });
+    if (channel && channel.isTextBased()) await channel.send({ embeds: [embed], components: components || [] });
   } catch (e) {
     console.error(`[notify:${guildId}]`, e.message);
   }
@@ -95,6 +101,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('rsetup|')) { await handleSetupButton(interaction); return; }
+      if (interaction.customId.startsWith('rmute|') || interaction.customId.startsWith('ralert|')) { await alerts.handleAlertButton(interaction); return; }
       await handleControlButton(interaction);
       return;
     }

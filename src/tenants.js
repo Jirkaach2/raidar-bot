@@ -18,7 +18,7 @@ const store = require('./store');
  */
 
 function emptyTenant() {
-  return { credentials: null, server: null, devices: [], notifyChannelId: null, controlRoleId: null, allowedUserIds: [] };
+  return { credentials: null, server: null, devices: [], notifyChannelId: null, controlRoleId: null, allowedUserIds: [], mutedUntil: 0 };
 }
 
 let tenants = {};
@@ -57,6 +57,14 @@ function setCredentials(guildId, credentials) { return update(guildId, { credent
 function setServer(guildId, server) { return update(guildId, { server }); }
 function setNotifyChannel(guildId, channelId) { return update(guildId, { notifyChannelId: channelId }); }
 
+/** Mute alarm posting for this guild until `ts` (epoch ms). */
+function setMutedUntil(guildId, ts) { return update(guildId, { mutedUntil: ts || 0 }); }
+/** True while the guild's alarm mute window is still active. */
+function isMuted(guildId) {
+  const t = get(guildId);
+  return !!(t && t.mutedUntil && t.mutedUntil > Date.now());
+}
+
 function upsertDevice(guildId, device) {
   const t = ensure(guildId);
   const i = t.devices.findIndex((d) => d.entityId === device.entityId);
@@ -79,5 +87,6 @@ module.exports = {
   init,
   get, ensure, all, update, remove,
   setCredentials, setServer, setNotifyChannel,
+  setMutedUntil, isMuted,
   upsertDevice, removeDevice,
 };

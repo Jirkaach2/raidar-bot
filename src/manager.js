@@ -33,6 +33,26 @@ function formatCheckLine(p) {
   return line;
 }
 
+/** HH:MM in-game clock from a getTime() payload. */
+function fmtGameTime(t) {
+  const h = Math.floor(t.time || 0);
+  const m = Math.floor(((t.time || 0) - h) * 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** Short relative age (e.g. "2d 3h ago") from an epoch-seconds timestamp. */
+function shortRelative(unixSec) {
+  const s = Math.max(0, Math.floor((Date.now() - unixSec * 1000) / 1000));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (!d) parts.push(`${m}m`);
+  return `${parts.slice(0, 2).join(' ') || '0m'} ago`;
+}
+
 class Manager {
   constructor() {
     this.rust = new Map();      // guildId -> RustBridge
@@ -82,24 +102,51 @@ class Manager {
       bridge.on('connected', (s) => console.log(`[rust:${guildId}] connected to ${s.name || s.ip}`));
       bridge.on('disconnected', () => console.log(`[rust:${guildId}] disconnected`));
       bridge.on('rust-error', (e) => console.error(`[rust:${guildId}]`, e && e.message ? e.message : e));
-      // In-game `!check <steamid>` → compact one-line reply in team chat.
+      // In-game team-chat commands → compact one-line replies in team chat.
       bridge.on('teamMessage', async (m) => {
         try {
           const text = m && m.message;
           if (!text || typeof text !== 'string') return;
-          const match = text.match(/^\s*!check\s+"?(\d{17})"?/i);
-          if (!match) return;
-          const steamId = match[1];
-          let p;
-          try {
-            p = await lookupPlayer(steamId);
-          } catch (e) {
-            await bridge.sendTeamMessage(`RAIDAR: ${e.message || 'invalid SteamID64'}`).catch(() => {});
+          // Never react to our own "RAIDAR:" replies (avoids feedback loops).
+          if (/^\s*RAIDAR:/i.test(text)) return;
+          const token = (text.trim().split(/\s+/)[0] || '').toLowerCase();
+
+          if (token === '!check') {
+            const match = text.match(/^\s*!check\s+"?(\d{17})"?/i);
+            if (!match) return;
+            const steamId = match[1];
+            let p;
+            try {
+              p = await lookupPlayer(steamId);
+            } catch (e) {
+              await bridge.sendTeamMessage(`RAIDAR: ${e.message || 'invalid SteamID64'}`).catch(() => {});
+              return;
+            }
+            await bridge.sendTeamMessage(formatCheckLine(p)).catch(() => {});
             return;
           }
-          await bridge.sendTeamMessage(formatCheckLine(p)).catch(() => {});
+
+          if (token === '!pop') {
+            const info = await bridge.getInfo();
+            await bridge.sendTeamMessage(`RAIDAR: ${info.players}/${info.maxPlayers} online`).catch(() => {});
+            return;
+          }
+
+          if (token === '!time') {
+            const tm = await bridge.getTime();
+            const day = tm.time >= tm.sunrise && tm.time < tm.sunset;
+            await bridge.sendTeamMessage(`RAIDAR: ${fmtGameTime(tm)} in-game (${day ? 'day' : 'night'})`).catch(() => {});
+            return;
+          }
+
+          if (token === '!wipe') {
+            const info = await bridge.getInfo();
+            const rel = info.wipeTime ? shortRelative(info.wipeTime) : 'unknown';
+            await bridge.sendTeamMessage(`RAIDAR: last wipe ${rel}`).catch(() => {});
+            return;
+          }
         } catch (e) {
-          console.error(`[rust:${guildId}] !check`, e && e.message ? e.message : e);
+          console.error(`[rust:${guildId}] teamMessage`, e && e.message ? e.message : e);
         }
       });
     }

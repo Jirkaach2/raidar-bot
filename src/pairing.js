@@ -6,6 +6,7 @@ const { config } = require('./config');
 const link = require('./link');
 const tenants = require('./tenants');
 const manager = require('./manager');
+const alerts = require('./alerts');
 
 const ACCENT = 0xce422b;
 
@@ -58,13 +59,31 @@ function buildNotifyEmbed(feature, content, fields, serverName) {
   const st = FEATURE_STYLE[feature] || { c: ACCENT, a: 'RAIDAR ALERT' };
   const p = parseContent(content);
   const embed = new EmbedBuilder().setColor(st.c).setAuthor({ name: st.a }).setTimestamp()
-    .setFooter({ text: `${serverName || 'Raidar'} · Tactical Intelligence` });
+    .setFooter({ text: `${serverName || 'Raidar'} · Real-time Monitoring` });
   if (p.title) embed.setTitle(`${p.emoji ? p.emoji + ' ' : ''}${p.title}`.slice(0, 256));
   embed.setDescription((p.desc ? `>>> ${p.desc}` : (content || '\u200b')).slice(0, 4096));
   if (Array.isArray(fields) && fields.length) {
     embed.addFields(fields.slice(0, 10).map((f) => ({ name: String(f.name || '\u200b').slice(0, 256), value: String(f.value || '\u200b').slice(0, 1024), inline: !!f.inline })));
   }
   return embed;
+}
+
+// True when a pushed feature should use the rich alarm format (alarm/raid/tc).
+function isAlarmFeature(feature) { return (FEATURE_CHANNEL[feature] || 'events') === 'alarms'; }
+
+// Build the rich fielded alert + button row for an app-pushed alarm/raid/tc.
+function buildAlarmMessage(feature, content, fields, serverName, guildId) {
+  const p = parseContent(content);
+  const gridField = Array.isArray(fields) ? fields.find((f) => /grid/i.test(f && f.name || '')) : null;
+  const embed = alerts.buildAlertEmbed({
+    title: `${p.emoji ? p.emoji + ' ' : ''}${p.title || 'RAID ALERT'}`.slice(0, 256),
+    targetEntity: p.title || 'Smart Alarm',
+    grid: gridField ? gridField.value : '—',
+    serverName: serverName || 'Unknown',
+    triggerUnix: Math.floor(Date.now() / 1000),
+    description: p.desc ? `>>> ${p.desc}` : undefined,
+  });
+  return { embeds: [embed], components: [alerts.buildAlertButtons(guildId)] };
 }
 
 function start() {
@@ -138,7 +157,16 @@ function start() {
       if (!chId || !discordClient) continue;
       try {
         const c = await discordClient.channels.fetch(chId);
-        if (c && c.isTextBased()) { await c.send({ embeds: [buildNotifyEmbed(feature, content, fields, t.server && t.server.name)] }); sent++; }
+        if (!c || !c.isTextBased()) continue;
+        if (isAlarmFeature(feature)) {
+          // Respect a per-guild mute window set via the "Mute 1 Hour" button.
+          if (tenants.isMuted(guildId)) continue;
+          await c.send(buildAlarmMessage(feature, content, fields, t.server && t.server.name, guildId));
+          sent++;
+        } else {
+          await c.send({ embeds: [buildNotifyEmbed(feature, content, fields, t.server && t.server.name)] });
+          sent++;
+        }
       } catch { /* channel gone / no perms */ }
     }
     console.log(`[notify] feature=${feature} → ${sent} channel(s)`);
