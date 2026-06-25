@@ -9,6 +9,7 @@ const link = require('./link');
 const channels = require('./channels');
 const { canControl } = require('./permissions');
 const { getGridCoordinate } = require('./grid');
+const { lookupPlayer } = require('./lookup');
 
 const ACCENT = 0xce422b;
 const DANGER = 0xef4444;
@@ -39,6 +40,20 @@ function fmtTime(t) {
 }
 function isDay(t) { return t.time >= t.sunrise && t.time < t.sunset; }
 function trunc(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+/**
+ * Cheat-risk heuristic shared by /check and !check.
+ * HIGH if VAC/game banned, or suspiciously high K/D with volume, or very high accuracy.
+ * @returns {'HIGH'|'MEDIUM'|'LOW'}
+ */
+function cheatRisk(p) {
+  if (p.vacBanned || (p.gameBans && p.gameBans > 0)) return 'HIGH';
+  if (p.kd != null && p.kd > 4 && p.kills != null && p.kills > 50) return 'HIGH';
+  if (p.accuracy != null && p.accuracy > 0.35) return 'HIGH';
+  // MEDIUM: notable-but-not-damning signals.
+  if ((p.kd != null && p.kd > 2.5) || (p.accuracy != null && p.accuracy > 0.22) || (p.headshotPct != null && p.headshotPct > 35)) return 'MEDIUM';
+  return 'LOW';
+}
 
 const MARKER_LABELS = { 5: '🚢 Cargo Ship', 8: '🚁 Patrol Heli', 4: '🛩️ Chinook', 6: '📦 Locked Crate', 2: '💥 Explosion', 3: '🛒 Vending' };
 const DEVICE_GROUPS = { 1: '🔌 Smart Switches', 2: '🚨 Smart Alarms', 3: '📦 Storage Monitors' };
@@ -135,6 +150,68 @@ const commands = [
   },
 
   // ── Read-only ──────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('check').setDescription('Look up a Rust player by SteamID64')
+      .addStringOption((o) => o.setName('steamid').setDescription('SteamID64 (17 digits)').setRequired(true)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const steamId = interaction.options.getString('steamid');
+      let p;
+      try {
+        p = await lookupPlayer(steamId);
+      } catch (e) {
+        return interaction.editReply(`⚠️ ${e.message || 'Invalid SteamID64.'}`);
+      }
+      const risk = cheatRisk(p);
+      const banned = p.vacBanned || (p.gameBans && p.gameBans > 0);
+      const riskEmoji = risk === 'HIGH' ? '🔴' : risk === 'MEDIUM' ? '🟡' : '🟢';
+      const profileUrl = `https://steamcommunity.com/profiles/${p.steamId}`;
+
+      // Rust hours field with last-2wk and per-day breakdown.
+      let hoursVal;
+      if (p.rustHours == null) {
+        hoursVal = p.visibility === 'private' ? '🔒 Private profile' : '—';
+      } else {
+        const perDay = p.recentHours != null ? Math.round((p.recentHours / 14) * 10) / 10 : null;
+        const extra = [];
+        if (p.recentHours != null) extra.push(`${p.recentHours}h last 2wk`);
+        if (perDay != null) extra.push(`${perDay}h/day`);
+        hoursVal = `**${p.rustHours.toLocaleString()}h**${extra.length ? `\n\`${extra.join(' · ')}\`` : ''}`;
+      }
+
+      // Ban status.
+      let banVal;
+      if (banned) {
+        const bits = [];
+        if (p.vacBanned) bits.push('🚫 VAC banned');
+        if (p.gameBans > 0) bits.push(`🚫 ${p.gameBans} game ban${p.gameBans === 1 ? '' : 's'}`);
+        if (p.daysSinceLastBan != null) bits.push(`\`${p.daysSinceLastBan}d ago\``);
+        banVal = bits.join('\n');
+      } else {
+        banVal = '✅ Clean';
+      }
+
+      const fmtNum = (n) => (n == null ? '—' : (Math.round(n * 100) / 100).toLocaleString());
+      const embed = new EmbedBuilder()
+        .setColor(banned || risk === 'HIGH' ? DANGER : ACCENT)
+        .setAuthor({ name: '🔍  PLAYER LOOKUP' })
+        .setTitle(p.name)
+        .setURL(profileUrl)
+        .addFields(
+          { name: '⏱️ Rust Hours', value: hoursVal, inline: true },
+          { name: '🛡️ Bans', value: banVal, inline: true },
+          { name: '⚠️ Cheat Risk', value: `${riskEmoji} **${risk}**`, inline: true },
+          { name: '🎯 K/D', value: fmtNum(p.kd), inline: true },
+          { name: '🔫 Accuracy', value: p.accuracy == null ? '—' : `${(Math.round(p.accuracy * 1000) / 10)}%`, inline: true },
+          { name: '💀 Headshot %', value: p.headshotPct == null ? '—' : `${Math.round(p.headshotPct * 10) / 10}%`, inline: true },
+        )
+        .setDescription(`[Steam profile](${profileUrl}) · \`${p.steamId}\``)
+        .setFooter(FOOTER).setTimestamp();
+      if (p.kills != null) embed.addFields({ name: '☠️ Kills', value: fmtNum(p.kills), inline: true });
+      if (p.avatar) embed.setThumbnail(p.avatar);
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
   {
     data: new SlashCommandBuilder().setName('status').setDescription('Server population, map and wipe info'),
     async execute(interaction) {

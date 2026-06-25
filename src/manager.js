@@ -1,6 +1,7 @@
 'use strict';
 const RustBridge = require('./rust');
 const tenants = require('./tenants');
+const { lookupPlayer } = require('./lookup');
 
 /**
  * Owns Rust+ connections per guild, with idle management:
@@ -13,6 +14,24 @@ const tenants = require('./tenants');
  * injected by index.js to post to Discord.
  */
 const IDLE_MS = 10 * 60 * 1000;
+
+/**
+ * Compact one-line team-chat summary for `!check` (kept under ~120 chars).
+ * Omits null fields. Example:
+ *   RAIDAR: Joe | 1,204h Rust | 8h/2wk | VAC | K/D 2.3
+ */
+function formatCheckLine(p) {
+  const parts = [`RAIDAR: ${p.name}`];
+  if (p.rustHours != null) parts.push(`${p.rustHours.toLocaleString()}h Rust`);
+  else if (p.visibility === 'private') parts.push('private');
+  if (p.recentHours != null) parts.push(`${p.recentHours}h/2wk`);
+  if (p.vacBanned) parts.push('VAC');
+  else if (p.gameBans && p.gameBans > 0) parts.push(`${p.gameBans} game ban${p.gameBans === 1 ? '' : 's'}`);
+  if (p.kd != null) parts.push(`K/D ${Math.round(p.kd * 100) / 100}`);
+  let line = parts.join(' | ');
+  if (line.length > 120) line = line.slice(0, 119) + '…';
+  return line;
+}
 
 class Manager {
   constructor() {
@@ -63,6 +82,26 @@ class Manager {
       bridge.on('connected', (s) => console.log(`[rust:${guildId}] connected to ${s.name || s.ip}`));
       bridge.on('disconnected', () => console.log(`[rust:${guildId}] disconnected`));
       bridge.on('rust-error', (e) => console.error(`[rust:${guildId}]`, e && e.message ? e.message : e));
+      // In-game `!check <steamid>` → compact one-line reply in team chat.
+      bridge.on('teamMessage', async (m) => {
+        try {
+          const text = m && m.message;
+          if (!text || typeof text !== 'string') return;
+          const match = text.match(/^\s*!check\s+"?(\d{17})"?/i);
+          if (!match) return;
+          const steamId = match[1];
+          let p;
+          try {
+            p = await lookupPlayer(steamId);
+          } catch (e) {
+            await bridge.sendTeamMessage(`RAIDAR: ${e.message || 'invalid SteamID64'}`).catch(() => {});
+            return;
+          }
+          await bridge.sendTeamMessage(formatCheckLine(p)).catch(() => {});
+        } catch (e) {
+          console.error(`[rust:${guildId}] !check`, e && e.message ? e.message : e);
+        }
+      });
     }
     bridge.connect(t.server);
   }
