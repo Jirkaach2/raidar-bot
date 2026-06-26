@@ -41,19 +41,6 @@ function fmtGameTime(t) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
-/** In-game time (h/m) until the next sunrise/sunset transition. */
-function untilTransition(t) {
-  const day = t.time >= t.sunrise && t.time < t.sunset;
-  let delta;
-  if (day) delta = t.sunset - t.time;
-  else if (t.time >= t.sunset) delta = (24 - t.time) + t.sunrise;
-  else delta = t.sunrise - t.time;
-  if (delta < 0) delta += 24;
-  const h = Math.floor(delta);
-  const m = Math.floor((delta - h) * 60);
-  return { day, next: day ? 'night' : 'day', h, m };
-}
-
 /** Short relative age (e.g. "2d 3h ago") from an epoch-seconds timestamp. */
 function shortRelative(unixSec) {
   const s = Math.max(0, Math.floor((Date.now() - unixSec * 1000) / 1000));
@@ -65,6 +52,16 @@ function shortRelative(unixSec) {
   if (h) parts.push(`${h}h`);
   if (!d) parts.push(`${m}m`);
   return `${parts.slice(0, 2).join(' ') || '0m'} ago`;
+}
+
+/** Compact relative age (e.g. "1h4m ago") from an epoch-ms timestamp. */
+function agoMs(ms) {
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h${m}m ago`;
+  if (m > 0) return `${m}m ago`;
+  return `${s}s ago`;
 }
 
 /**
@@ -82,6 +79,7 @@ class Manager {
   constructor() {
     this.rust = new Map();      // guildId -> RustBridge
     this.lastUsed = new Map();  // guildId -> timestamp
+    this.lastSeen = new Map();  // guildId -> { cargo?, heli?, vendor? } epoch-ms last present
     this.onNotify = () => {};
     setInterval(() => this._sweepIdle(), 60_000).unref();
   }
@@ -92,6 +90,23 @@ class Manager {
   }
 
   touch(guildId) { this.lastUsed.set(guildId, Date.now()); }
+
+  /**
+   * Lightweight, memory-light last-seen tracker. Called whenever a command
+   * fetches markers: stamps cargo/heli/vendor that are currently present so
+   * !cargo/!heli/!vendor can answer "not up — last seen Xm ago" later this
+   * session. Not persisted (resets on restart). Returns the per-guild record.
+   */
+  recordSeen(guildId, markers) {
+    let s = this.lastSeen.get(guildId);
+    if (!s) { s = {}; this.lastSeen.set(guildId, s); }
+    const now = Date.now();
+    const list = markers || [];
+    if (list.some((mm) => mm.type === 5)) s.cargo = now;
+    if (list.some((mm) => mm.type === 8)) s.heli = now;
+    if (list.some((mm) => mm.type === 15)) s.vendor = now;
+    return s;
+  }
 
   getRust(guildId) {
     const b = this.rust.get(guildId);
@@ -128,6 +143,7 @@ class Manager {
       bridge.on('disconnected', () => console.log(`[rust:${guildId}] disconnected`));
       bridge.on('rust-error', (e) => console.error(`[rust:${guildId}]`, e && e.message ? e.message : e));
       // In-game team-chat commands → compact one-line replies in team chat.
+      const self = this;
       bridge.on('teamMessage', async (m) => {
         try {
           const text = m && m.message;
@@ -172,48 +188,45 @@ class Manager {
           }
 
           if (token === '!team') {
+            const info = await bridge.getInfo();
             const team = await bridge.getTeamInfo();
             const members = team.members || [];
             const online = members.filter((mm) => mm.isOnline);
-            let names = online.map((mm) => mm.name).join(', ');
-            if (names.length > 80) names = names.slice(0, 79) + '…';
-            await bridge.sendTeamMessage(`RAIDAR: ${online.length}/${members.length} online${names ? ': ' + names : ''}`).catch(() => {});
+            // Compact one line with each online teammate's grid, e.g.
+            // "RAIDAR: 3/5 online — Joe K12, Bob D7"
+            const names = online.map((mm) => `${mm.name} ${getGridCoordinate(mm.x, mm.y, info.mapSize)}`).join(', ');
+            let line = `RAIDAR: ${online.length}/${members.length} online${names ? ' — ' + names : ''}`;
+            if (line.length > 120) line = line.slice(0, 119) + '…';
+            await bridge.sendTeamMessage(line).catch(() => {});
             return;
           }
 
           if (token === '!cargo') {
             const info = await bridge.getInfo();
             const res = await bridge.getMapMarkers();
-            const cargo = (res.markers || []).find((mm) => mm.type === 5);
-            await bridge.sendTeamMessage(cargo ? `RAIDAR: cargo at ${getGridCoordinate(cargo.x, cargo.y, info.mapSize)}` : 'RAIDAR: no cargo on map').catch(() => {});
+            const markers = res.markers || [];
+            const seen = self.recordSeen(guildId, markers);
+            const cargo = markers.find((mm) => mm.type === 5);
+            let msg;
+            if (cargo) msg = `RAIDAR: cargo at ${getGridCoordinate(cargo.x, cargo.y, info.mapSize)}`;
+            else if (seen.cargo) msg = `RAIDAR: cargo not up — last seen ${agoMs(seen.cargo)}`;
+            else msg = 'RAIDAR: no cargo on map';
+            await bridge.sendTeamMessage(msg).catch(() => {});
             return;
           }
 
           if (token === '!vendor') {
             const info = await bridge.getInfo();
             const res = await bridge.getMapMarkers();
+            const markers = res.markers || [];
+            const seen = self.recordSeen(guildId, markers);
             // Travelling vendor is marker type 15 on newer rustplus.
-            const vendor = (res.markers || []).find((mm) => mm.type === 15);
-            await bridge.sendTeamMessage(vendor ? `RAIDAR: vendor at ${getGridCoordinate(vendor.x, vendor.y, info.mapSize)}` : 'RAIDAR: no travelling vendor on map').catch(() => {});
-            return;
-          }
-
-          if (token === '!online') {
-            const team = await bridge.getTeamInfo();
-            const members = team.members || [];
-            const online = members.filter((mm) => mm.isOnline);
-            await bridge.sendTeamMessage(`RAIDAR: ${online.length}/${members.length} teammates online`).catch(() => {});
-            return;
-          }
-
-          if (token === '!grid') {
-            const info = await bridge.getInfo();
-            const team = await bridge.getTeamInfo();
-            const online = (team.members || []).filter((mm) => mm.isOnline);
-            let line = online.map((mm) => `${mm.name} ${getGridCoordinate(mm.x, mm.y, info.mapSize)}`).join(', ');
-            if (!line) line = 'no teammates online';
-            if (line.length > 120) line = line.slice(0, 119) + '…';
-            await bridge.sendTeamMessage(`RAIDAR: ${line}`).catch(() => {});
+            const vendor = markers.find((mm) => mm.type === 15);
+            let msg;
+            if (vendor) msg = `RAIDAR: vendor at ${getGridCoordinate(vendor.x, vendor.y, info.mapSize)}`;
+            else if (seen.vendor) msg = `RAIDAR: vendor not up — last seen ${agoMs(seen.vendor)}`;
+            else msg = 'RAIDAR: no travelling vendor on map';
+            await bridge.sendTeamMessage(msg).catch(() => {});
             return;
           }
 
@@ -227,14 +240,21 @@ class Manager {
           if (token === '!heli') {
             const info = await bridge.getInfo();
             const res = await bridge.getMapMarkers();
-            const heli = (res.markers || []).find((mm) => mm.type === 8);
-            await bridge.sendTeamMessage(heli ? `RAIDAR: heli at ${getGridCoordinate(heli.x, heli.y, info.mapSize)}` : 'RAIDAR: no heli active').catch(() => {});
+            const markers = res.markers || [];
+            const seen = self.recordSeen(guildId, markers);
+            const heli = markers.find((mm) => mm.type === 8);
+            let msg;
+            if (heli) msg = `RAIDAR: heli at ${getGridCoordinate(heli.x, heli.y, info.mapSize)}`;
+            else if (seen.heli) msg = `RAIDAR: heli not up — last seen ${agoMs(seen.heli)}`;
+            else msg = 'RAIDAR: no heli on map';
+            await bridge.sendTeamMessage(msg).catch(() => {});
             return;
           }
 
           if (token === '!events') {
             const res = await bridge.getMapMarkers();
             const markers = res.markers || [];
+            self.recordSeen(guildId, markers);
             const cargo = markers.filter((mm) => mm.type === 5).length;
             const heli = markers.filter((mm) => mm.type === 8).length;
             const chinook = markers.filter((mm) => mm.type === 4).length;
@@ -245,13 +265,6 @@ class Manager {
             if (chinook) parts.push(`chinook x${chinook}`);
             if (crate) parts.push(`crate x${crate}`);
             await bridge.sendTeamMessage(`RAIDAR: ${parts.length ? parts.join(', ') : 'no active events'}`).catch(() => {});
-            return;
-          }
-
-          if (token === '!sun') {
-            const tm = await bridge.getTime();
-            const u = untilTransition(tm);
-            await bridge.sendTeamMessage(`RAIDAR: ${u.h}h${u.m}m until ${u.next}`).catch(() => {});
             return;
           }
 
@@ -266,13 +279,81 @@ class Manager {
           if (token === '!crate' || token === '!crates') {
             const info = await bridge.getInfo();
             const res = await bridge.getMapMarkers();
+            const markers = res.markers || [];
+            self.recordSeen(guildId, markers);
             // No manual timer store on the bot — report live locked-crate
             // markers (type 6) currently on the map, with their grids.
-            const crates = (res.markers || []).filter((mm) => mm.type === 6);
+            const crates = markers.filter((mm) => mm.type === 6);
             if (!crates.length) { await bridge.sendTeamMessage('RAIDAR: no locked crates on map').catch(() => {}); return; }
             let grids = crates.map((c) => getGridCoordinate(c.x, c.y, info.mapSize)).join(', ');
             if (grids.length > 100) grids = grids.slice(0, 99) + '…';
             await bridge.sendTeamMessage(`RAIDAR: ${crates.length} crate(s): ${grids}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!oilrig' || token === '!largeoilrig') {
+            // The bot has no monument positions, so both rig commands report
+            // the live locked-crate markers (type 6) with grids, or nothing.
+            const info = await bridge.getInfo();
+            const res = await bridge.getMapMarkers();
+            const markers = res.markers || [];
+            self.recordSeen(guildId, markers);
+            const label = token === '!largeoilrig' ? 'large oil rig' : 'oil rig';
+            const crates = markers.filter((mm) => mm.type === 6);
+            if (!crates.length) { await bridge.sendTeamMessage(`RAIDAR: ${label} — no crate up right now`).catch(() => {}); return; }
+            let grids = crates.map((c) => getGridCoordinate(c.x, c.y, info.mapSize)).join(', ');
+            if (grids.length > 90) grids = grids.slice(0, 89) + '…';
+            await bridge.sendTeamMessage(`RAIDAR: locked crate(s): ${grids}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!deepsea') {
+            const info = await bridge.getInfo();
+            const res = await bridge.getMapMarkers();
+            const markers = res.markers || [];
+            self.recordSeen(guildId, markers);
+            const size = info.mapSize || 0;
+            // Deep-sea shops are vending machines (type 3) sitting off the
+            // playable grid (negative coords or beyond the map size).
+            const offshore = markers.filter((mm) =>
+              mm.type === 3 && (mm.x < 0 || mm.y < 0 || mm.x > size || mm.y > size));
+            if (!offshore.length) { await bridge.sendTeamMessage('RAIDAR: no deep sea shops detected').catch(() => {}); return; }
+            let grids = offshore.slice(0, 6).map((c) => getGridCoordinate(c.x, c.y, size)).join(', ');
+            if (grids.length > 90) grids = grids.slice(0, 89) + '…';
+            await bridge.sendTeamMessage(`RAIDAR: ${offshore.length} deep sea shop(s): ${grids}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!vend') {
+            const query = text.trim().split(/\s+/).slice(1).join(' ').toLowerCase();
+            if (!query) { await bridge.sendTeamMessage('RAIDAR: usage !vend <item>').catch(() => {}); return; }
+            const info = await bridge.getInfo();
+            const res = await bridge.getMapMarkers();
+            const markers = res.markers || [];
+            self.recordSeen(guildId, markers);
+            const shops = markers.filter((mm) => mm.type === 3);
+            const hits = [];
+            for (const shop of shops) {
+              const orders = shop.sellOrders || [];
+              // Raw rustplus orders expose itemId (no name table on the bot),
+              // plus an optional itemName on some forks. Match either: item
+              // name substring, or an exact numeric itemId query.
+              const order = orders.find((o) => {
+                if ((o.amountInStock ?? 0) <= 0) return false;
+                const nm = String(o.itemName || '').toLowerCase();
+                if (nm && nm.includes(query)) return true;
+                return /^\d+$/.test(query) && String(o.itemId) === query;
+              });
+              if (!order) continue;
+              const grid = getGridCoordinate(shop.x, shop.y, info.mapSize);
+              const cur = order.currencyId === -932201673 ? ' scrap' : '';
+              hits.push(`${grid} @${order.costPerItem}${cur}`);
+              if (hits.length >= 4) break;
+            }
+            if (!hits.length) { await bridge.sendTeamMessage(`RAIDAR: no shops selling ${query}`).catch(() => {}); return; }
+            let line = `RAIDAR: ${query} — ${hits.join(', ')}`;
+            if (line.length > 120) line = line.slice(0, 119) + '…';
+            await bridge.sendTeamMessage(line).catch(() => {});
             return;
           }
 
@@ -319,16 +400,11 @@ class Manager {
             return;
           }
 
-          if (token === '!queue') {
-            const info = await bridge.getInfo();
-            await bridge.sendTeamMessage(`RAIDAR: ${info.queuedPlayers || 0} queued`).catch(() => {});
-            return;
-          }
-
           if (token === '!help') {
-            await bridge.sendTeamMessage('RAIDAR: !check !pop !queue !online !team !grid !status').catch(() => {});
-            await bridge.sendTeamMessage('RAIDAR: !time !sun !wipe !cargo !heli !vendor !crates !events').catch(() => {});
-            await bridge.sendTeamMessage('RAIDAR: !devices !switch <name> !seed !loot <crate>').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !check !pop !team !status !time !wipe').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !cargo !heli !vendor !events !crates !deepsea').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !oilrig !largeoilrig !vend <item> !loot <crate>').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !devices !switch <name> !seed').catch(() => {});
             return;
           }
         } catch (e) {
