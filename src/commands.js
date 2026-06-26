@@ -71,6 +71,67 @@ function cheatRisk(p) {
 const MARKER_LABELS = { 5: '🚢 Cargo Ship', 8: '🚁 Patrol Heli', 4: '🛩️ Chinook', 6: '📦 Locked Crate', 2: '💥 Explosion', 3: '🛒 Vending', 15: '🛒 Travelling Vendor' };
 const DEVICE_GROUPS = { 1: '🔌 Smart Switches', 2: '🚨 Smart Alarms', 3: '📦 Storage Monitors' };
 
+// ── Built-in loot & monument reference data ──────────────
+// The bot has no live loot DB, so these are compact curated summaries. Chances
+// are approximate community values, meant as a quick reference, not gospel.
+const LOOT_TABLES = {
+  military: { label: 'Military Crate', items: [
+    ['Metal Fragments', '24%'], ['Scrap', '18%'], ['Pistol Bullet', '12%'], ['MP5A4', '5%'], ['Semi-Auto Rifle', '5%'],
+    ['Custom SMG', '5%'], ['Thompson', '5%'], ['Road Sign Armor', '4%'], ['Coffee Can Helmet', '4%'], ['Metal Facemask', '3%'],
+    ['Explosives', '2%'], ['C4', '1%'],
+  ] },
+  elite: { label: 'Elite Tier Crate', items: [
+    ['Scrap', '20%'], ['Tech Trash', '10%'], ['Assault Rifle', '6%'], ['LR-300', '5%'], ['Bolt Action Rifle', '5%'],
+    ['M249', '2%'], ['Explosives', '6%'], ['C4', '3%'], ['Rocket', '3%'], ['Metal Chest Plate', '4%'],
+    ['HQ Metal', '8%'], ['Tech Parts', '6%'],
+  ] },
+  basic: { label: 'Basic Crate', items: [
+    ['Wood', '22%'], ['Metal Fragments', '18%'], ['Low Grade Fuel', '12%'], ['Cloth', '10%'], ['Scrap', '8%'],
+    ['Bandage', '6%'], ['Pistol Bullet', '5%'], ['Stone', '5%'], ['Sheet Metal', '4%'], ['Tarp', '4%'],
+    ['Rope', '3%'], ['Sewing Kit', '3%'],
+  ] },
+  locked: { label: 'Locked Crate (Hackable)', items: [
+    ['Scrap', '16%'], ['Assault Rifle', '7%'], ['Bolt Action Rifle', '6%'], ['LR-300', '6%'], ['M249', '3%'],
+    ['Explosives', '8%'], ['C4', '5%'], ['Rocket', '5%'], ['Tech Trash', '8%'], ['HQ Metal', '8%'],
+    ['Metal Chest Plate', '5%'], ['Explosive Ammo', '5%'],
+  ] },
+  scientist: { label: 'Scientist (NPC drop)', items: [
+    ['Scrap', '26%'], ['Pistol Bullet', '14%'], ['5.56 Rifle Ammo', '12%'], ['Bandage', '8%'], ['MP5A4', '4%'],
+    ['Semi-Auto Rifle', '4%'], ['Medical Syringe', '6%'], ['Smoke Grenade', '5%'], ['Frag Grenade', '4%'], ['Cooked Meat', '6%'],
+    ['Tech Trash', '4%'], ['Green Keycard', '3%'],
+  ] },
+};
+
+// Compact monument reference: tier (puzzle colour), keycards needed and notes.
+const MONUMENTS = {
+  'Launch Site': { tier: 'Red', keycards: 'Green → Blue → Red', notes: 'Endgame loot, Bradley APC patrols the grounds. Fuses + cards required.' },
+  'Airfield': { tier: 'Blue', keycards: 'Green → Blue', notes: 'Two puzzles, blue card room. Watch for scientists.' },
+  'Military Tunnels': { tier: 'Red', keycards: 'Green → Red', notes: 'Heavy scientists + tunnel dwellers. Best scrap-to-effort but dangerous.' },
+  'Water Treatment Plant': { tier: 'Blue', keycards: 'Green → Blue', notes: 'Sprawling, multiple crates, blue card puzzle.' },
+  'Power Plant': { tier: 'Red', keycards: 'Green → Red', notes: 'Large monument, red card puzzle, plenty of scientists.' },
+  'Train Yard': { tier: 'Red', keycards: 'Green → Red', notes: 'Recycler + red card puzzle near the tower.' },
+  'Sewer Branch': { tier: 'Blue', keycards: 'Green → Blue', notes: 'Compact puzzle, good early/mid loot.' },
+  'Satellite Dish': { tier: 'Green', keycards: 'Green', notes: 'No fuse needed. Scientists + green card crate.' },
+  'Dome': { tier: 'Green', keycards: 'Green', notes: 'Climb to the top crate. Green card unlocks the inner loot.' },
+  'Harbor': { tier: 'Green', keycards: 'Green', notes: 'Recycler + green card puzzle. Two harbor variants exist.' },
+  'Oxum\'s Gas Station': { tier: 'None', keycards: 'None', notes: 'Safe small monument, recycler, basic crates.' },
+  'Mining Outpost': { tier: 'None', keycards: 'None', notes: 'Recycler + research table. Safe, low loot.' },
+  'Junkyard': { tier: 'None', keycards: 'None', notes: 'Recycler + car parts. Magnet crane scrap.' },
+  'Arctic Research Base': { tier: 'Blue', keycards: 'Blue', notes: 'Snow biome, blue card puzzle, requires a card from elsewhere.' },
+  'Abandoned Military Base': { tier: 'Red', keycards: 'Fuse only', notes: 'Heavy scientists, no card — just a fuse. High-tier loot.' },
+  'Giant Excavator Pit': { tier: 'None', keycards: 'None', notes: 'Run the excavator for resources/sulfur. Scientists guard it.' },
+  'Bandit Camp': { tier: 'Safe', keycards: 'None', notes: 'Safe zone. Casino, vending, recycler, no-build.' },
+  'Outpost': { tier: 'Safe', keycards: 'None', notes: 'Safe zone. Recycler, vending machines, research table.' },
+};
+const MONUMENT_NAMES = Object.keys(MONUMENTS);
+
+/** One-line top-N loot summary used by the in-game !loot reply. */
+function lootTopLine(key, n = 3) {
+  const t = LOOT_TABLES[key];
+  if (!t) return null;
+  return `${t.label}: ${t.items.slice(0, n).map(([name, ch]) => `${name} ${ch}`).join(', ')}`;
+}
+
 // ── Button-based device control ──────────────────────────
 /** Build button rows for the Smart Switches of a guild, reflecting live state. */
 async function buildControlRows(guildId, bridge) {
@@ -420,6 +481,86 @@ const commands = [
       await interaction.editReply({ embeds: [embed] });
     },
   },
+  {
+    data: new SlashCommandBuilder().setName('loot').setDescription('Loot-table summary for a crate type')
+      .addStringOption((o) => o.setName('crate').setDescription('Crate / source').setRequired(true).addChoices(
+        { name: 'military', value: 'military' },
+        { name: 'elite', value: 'elite' },
+        { name: 'basic', value: 'basic' },
+        { name: 'locked', value: 'locked' },
+        { name: 'scientist', value: 'scientist' },
+      )),
+    async execute(interaction) {
+      const key = interaction.options.getString('crate');
+      const t = LOOT_TABLES[key];
+      if (!t) return interaction.reply(ephemeral('Unknown crate type.'));
+      const lines = t.items.slice(0, 12).map(([name, ch]) => `\`${ch.padStart(4)}\`  ${name}`);
+      const embed = new EmbedBuilder()
+        .setColor(ACCENT).setAuthor({ name: '📦  LOOT TABLE' }).setTitle(t.label)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: 'Approximate chances · Raidar' }).setTimestamp();
+      await interaction.reply({ embeds: [embed] });
+    },
+  },
+  {
+    data: new SlashCommandBuilder().setName('monument').setDescription('Tier, keycards and notes for a monument')
+      .addStringOption((o) => o.setName('name').setDescription('Monument name').setRequired(true).setAutocomplete(true)),
+    async autocomplete(interaction) {
+      const focused = interaction.options.getFocused().toLowerCase();
+      const choices = MONUMENT_NAMES
+        .filter((n) => n.toLowerCase().includes(focused))
+        .slice(0, 25).map((n) => ({ name: n, value: n }));
+      await interaction.respond(choices);
+    },
+    async execute(interaction) {
+      const name = interaction.options.getString('name');
+      // Allow loose matches (case / partial) so typed input still resolves.
+      const key = MONUMENT_NAMES.find((n) => n.toLowerCase() === name.toLowerCase())
+        || MONUMENT_NAMES.find((n) => n.toLowerCase().includes(name.toLowerCase()));
+      const m = key && MONUMENTS[key];
+      if (!m) return interaction.reply(ephemeral(`Unknown monument. Try one of: ${MONUMENT_NAMES.slice(0, 8).join(', ')}…`));
+      const embed = new EmbedBuilder()
+        .setColor(ACCENT).setAuthor({ name: '🏛️  MONUMENT' }).setTitle(key)
+        .addFields(
+          { name: '🧩 Puzzle Tier', value: m.tier, inline: true },
+          { name: '💳 Keycards', value: m.keycards, inline: true },
+          { name: '📝 Notes', value: m.notes, inline: false },
+        )
+        .setFooter(FOOTER).setTimestamp();
+      await interaction.reply({ embeds: [embed] });
+    },
+  },
+  {
+    data: new SlashCommandBuilder().setName('online').setDescription('Count of online teammates'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const team = await (await bridgeFor(interaction)).getTeamInfo();
+      const members = team.members || [];
+      const online = members.filter((m) => m.isOnline);
+      const embed = new EmbedBuilder()
+        .setColor(ACCENT).setAuthor({ name: '🟢  TEAM ONLINE' })
+        .setDescription(`# ${online.length}/${members.length}\n-# teammates online`)
+        .setFooter(FOOTER).setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
+  {
+    data: new SlashCommandBuilder().setName('grid').setDescription('Grid of each online teammate (compact)'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const bridge = await bridgeFor(interaction);
+      const info = await bridge.getInfo();
+      const team = await bridge.getTeamInfo();
+      const online = (team.members || []).filter((m) => m.isOnline);
+      if (online.length === 0) return interaction.editReply('No teammates online right now.');
+      const lines = online.map((m) => `${m.isAlive ? '🟢' : '💀'} **${m.name}** · \`${getGridCoordinate(m.x, m.y, info.mapSize)}\``);
+      const embed = new EmbedBuilder()
+        .setColor(ACCENT).setAuthor({ name: '🗺️  TEAM GRID' })
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: `${online.length} online · Raidar` }).setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+    },
+  },
 
   // ── Help ───────────────────────────────────────────────
   {
@@ -429,6 +570,7 @@ const commands = [
         { name: 'ℹ️ Info', cmds: [
           ['/status', 'Server population, map and wipe info'],
           ['/pop', 'Current population'],
+          ['/online', 'Count of online teammates'],
           ['/time', 'In-game time and day/night'],
           ['/events', 'Live map events (cargo, heli, crates, chinook)'],
           ['/heli', 'Patrol Heli & Chinook locations'],
@@ -438,9 +580,14 @@ const commands = [
           ['/cargo', 'Locate the cargo ship on the map'],
           ['/help', 'List all Raidar commands'],
         ] },
+        { name: '🗺️ Reference', cmds: [
+          ['/loot', 'Loot-table summary for a crate type'],
+          ['/monument', 'Tier, keycards and notes for a monument'],
+        ] },
         { name: '🎯 Player', cmds: [
           ['/check', 'Look up a Rust player by SteamID64'],
           ['/team', 'Team members, status and grid'],
+          ['/grid', 'Grid of each online teammate (compact)'],
           ['/devices', 'List paired smart devices and their state'],
         ] },
         { name: '🎛️ Control', cmds: [
@@ -466,13 +613,17 @@ const commands = [
       embed.addFields({ name: '💬 In-game team chat', value: [
         '**!check <steamid>** — player risk lookup',
         '**!pop** — players online',
+        '**!online** — online teammate count',
         '**!time** — in-game time',
         '**!sun** — time until day/night',
         '**!wipe** — last wipe',
         '**!team** — online teammates',
+        '**!grid** — your team grids (compact)',
         '**!cargo** — cargo ship grid',
         '**!heli** — patrol heli grid',
+        '**!vendor** — travelling vendor grid',
         '**!events** — active events',
+        '**!loot <crate>** — top items (military/elite/basic/locked)',
         '**!status** — population + time',
         '**!help** — list chat commands',
       ].join('\n'), inline: false });

@@ -25,6 +25,10 @@ const FEATURE_CHANNEL = {
   price_watch: 'shops', shop: 'shops',
   spy: 'spy', enemy: 'spy',
   bans: 'bans',
+  // Device destroyed/offline pushes from the desktop app. Routed to 'events'
+  // (not 'alarms') so they render as a normal embed, not the rich alarm-button
+  // format — see isAlarmFeature().
+  device_destroyed: 'events', device: 'events',
 };
 const FEATURE_STYLE = {
   alarms: { c: 0xef4444, a: '🚨  BASE ALARM' }, alarm: { c: 0xef4444, a: '🚨  BASE ALARM' },
@@ -36,6 +40,7 @@ const FEATURE_STYLE = {
   shop: { c: 0x10b981, a: '🏪  NEW SHOP' },
   bans: { c: 0xef4444, a: '🚷  BAN TRACKER' }, enemy: { c: 0x8b5cf6, a: '🎯  ENEMY INTEL' },
   spy: { c: 0x8b5cf6, a: '🕵️  RUST SPY' }, event: { c: 0x06b6d4, a: '🌍  WORLD EVENT' },
+  device_destroyed: { c: 0xef4444, a: '🧨  DEVICE DESTROYED' }, device: { c: 0xf59e0b, a: '🔌  DEVICE EVENT' },
 };
 
 let discordClient = null;

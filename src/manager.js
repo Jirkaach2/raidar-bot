@@ -67,6 +67,17 @@ function shortRelative(unixSec) {
   return `${parts.slice(0, 2).join(' ') || '0m'} ago`;
 }
 
+/**
+ * Compact loot reference for the in-game `!loot <crate>` reply. No live DB, so
+ * these are curated top picks per crate (kept short for team chat).
+ */
+const LOOT_TOP = {
+  military: 'Military: Metal Frags, Scrap, Pistol Bullets',
+  elite: 'Elite: Scrap, Tech Trash, Assault Rifle',
+  basic: 'Basic: Wood, Metal Frags, Low Grade Fuel',
+  locked: 'Locked: Scrap, Tech Trash, HQ Metal',
+};
+
 class Manager {
   constructor() {
     this.rust = new Map();      // guildId -> RustBridge
@@ -178,6 +189,41 @@ class Manager {
             return;
           }
 
+          if (token === '!vendor') {
+            const info = await bridge.getInfo();
+            const res = await bridge.getMapMarkers();
+            // Travelling vendor is marker type 15 on newer rustplus.
+            const vendor = (res.markers || []).find((mm) => mm.type === 15);
+            await bridge.sendTeamMessage(vendor ? `RAIDAR: vendor at ${getGridCoordinate(vendor.x, vendor.y, info.mapSize)}` : 'RAIDAR: no travelling vendor on map').catch(() => {});
+            return;
+          }
+
+          if (token === '!online') {
+            const team = await bridge.getTeamInfo();
+            const members = team.members || [];
+            const online = members.filter((mm) => mm.isOnline);
+            await bridge.sendTeamMessage(`RAIDAR: ${online.length}/${members.length} teammates online`).catch(() => {});
+            return;
+          }
+
+          if (token === '!grid') {
+            const info = await bridge.getInfo();
+            const team = await bridge.getTeamInfo();
+            const online = (team.members || []).filter((mm) => mm.isOnline);
+            let line = online.map((mm) => `${mm.name} ${getGridCoordinate(mm.x, mm.y, info.mapSize)}`).join(', ');
+            if (!line) line = 'no teammates online';
+            if (line.length > 120) line = line.slice(0, 119) + '…';
+            await bridge.sendTeamMessage(`RAIDAR: ${line}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!loot') {
+            const crate = (text.trim().split(/\s+/)[1] || '').toLowerCase();
+            const line = LOOT_TOP[crate];
+            await bridge.sendTeamMessage(`RAIDAR: ${line || 'use !loot military|elite|basic|locked'}`).catch(() => {});
+            return;
+          }
+
           if (token === '!heli') {
             const info = await bridge.getInfo();
             const res = await bridge.getMapMarkers();
@@ -218,7 +264,7 @@ class Manager {
           }
 
           if (token === '!help') {
-            await bridge.sendTeamMessage('RAIDAR: !check !pop !time !sun !wipe !team !cargo !heli !events !status').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !check !pop !online !time !sun !wipe !team !grid !cargo !heli !vendor !events !loot !status').catch(() => {});
             return;
           }
         } catch (e) {

@@ -1,6 +1,7 @@
 'use strict';
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const { canControl } = require('./permissions');
+const manager = require('./manager');
 const tenants = require('./tenants');
 
 /**
@@ -16,10 +17,18 @@ const tenants = require('./tenants');
 const ALERT_COLOR = 0xef4444;
 const LIVE_MAP_URL = 'https://raidar.tech';
 const MUTE_MS = 60 * 60 * 1000;
+const BLANK = '\u200b';
+
+/** Render a grid value as "GRID <X>" (or "—" when unknown). */
+function fmtGrid(grid) {
+  const g = String(grid == null ? '' : grid).trim();
+  if (!g || g === '—' || /^unknown$/i.test(g)) return '—';
+  return `GRID ${g.replace(/^grid\s+/i, '')}`;
+}
 
 function buildAlertEmbed(opts = {}) {
   const {
-    title = '🚨 RAID ALERT',
+    title = '🚨 RAIDAR RAID ALERT',
     targetEntity = 'Smart Alarm',
     grid = '—',
     serverName = 'Unknown',
@@ -27,19 +36,25 @@ function buildAlertEmbed(opts = {}) {
     description,
   } = opts;
 
+  const desc = description || `Your smart alarm "**${String(targetEntity || 'Smart Alarm').slice(0, 200)}**" has triggered!`;
+
   const embed = new EmbedBuilder()
     .setColor(ALERT_COLOR)
     .setAuthor({ name: 'RAIDAR ALERTS SERVICE' })
     .setTitle(String(title).slice(0, 256))
+    .setDescription(String(desc).slice(0, 4096))
+    // 2×2 grid: inline fields render up to 3 per row, so a blank inline field
+    // after each pair forces an exact two-column layout.
     .addFields(
-      { name: '🎯 Target Entity', value: String(targetEntity || '—').slice(0, 1024), inline: true },
-      { name: '🗺️ In-Game Grid', value: String(grid || '—').slice(0, 1024), inline: true },
-      { name: '🖥️ Game Server', value: String(serverName || 'Unknown').slice(0, 1024), inline: true },
-      { name: '⏱️ Trigger Time', value: `<t:${triggerUnix}:T>`, inline: true },
+      { name: '🎯 TARGET ENTITY', value: String(targetEntity || '—').slice(0, 1024), inline: true },
+      { name: '🗺️ IN-GAME GRID', value: fmtGrid(grid), inline: true },
+      { name: BLANK, value: BLANK, inline: true },
+      { name: '🖥️ GAME SERVER', value: String(serverName || 'Unknown').slice(0, 1024), inline: true },
+      { name: '⏱️ TRIGGER TIME', value: `<t:${triggerUnix}:T>`, inline: true },
+      { name: BLANK, value: BLANK, inline: true },
     )
-    .setFooter({ text: 'Raidar Alerts • Real-time Monitoring' })
+    .setFooter({ text: 'Raidar Alerts • Real-time Monitoring        ● LIVE EVENT' })
     .setTimestamp();
-  if (description) embed.setDescription(String(description).slice(0, 4096));
   return embed;
 }
 
@@ -74,14 +89,17 @@ async function handleAlertButton(interaction) {
     return true;
   }
 
-  // ralert → re-post the same alert content with an @here team ping.
+  // ralert → ping @here in the channel AND relay into the live in-game team chat.
   try {
-    const embeds = (interaction.message && interaction.message.embeds) ? interaction.message.embeds : [];
     if (interaction.channel && interaction.channel.isTextBased()) {
-      await interaction.channel.send({ content: '@here', embeds, components: [buildAlertButtons(guildId)] });
+      await interaction.channel.send({ content: '@here 🚨 Base under attack — check the alert above!' });
     }
   } catch { /* ignore send failures */ }
-  await interaction.reply({ content: '📣 Team alerted.', flags: MessageFlags.Ephemeral });
+  try {
+    const bridge = await manager.ensureRust(guildId);
+    if (bridge) await bridge.sendTeamMessage('[RAIDAR] Base under attack — check Discord!');
+  } catch { /* no live bridge — the @here ping still went out */ }
+  await interaction.reply({ content: '📣 Team alerted in Discord + in-game chat.', flags: MessageFlags.Ephemeral });
   return true;
 }
 
