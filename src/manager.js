@@ -263,8 +263,72 @@ class Manager {
             return;
           }
 
+          if (token === '!crate' || token === '!crates') {
+            const info = await bridge.getInfo();
+            const res = await bridge.getMapMarkers();
+            // No manual timer store on the bot — report live locked-crate
+            // markers (type 6) currently on the map, with their grids.
+            const crates = (res.markers || []).filter((mm) => mm.type === 6);
+            if (!crates.length) { await bridge.sendTeamMessage('RAIDAR: no locked crates on map').catch(() => {}); return; }
+            let grids = crates.map((c) => getGridCoordinate(c.x, c.y, info.mapSize)).join(', ');
+            if (grids.length > 100) grids = grids.slice(0, 99) + '…';
+            await bridge.sendTeamMessage(`RAIDAR: ${crates.length} crate(s): ${grids}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!devices') {
+            const devices = (tenants.get(guildId) && tenants.get(guildId).devices) || [];
+            if (!devices.length) { await bridge.sendTeamMessage('RAIDAR: no paired devices').catch(() => {}); return; }
+            const parts = [];
+            for (const d of devices.slice(0, 8)) {
+              let state = '';
+              if (d.type === 1) {
+                try {
+                  const i = await bridge.getEntityInfo(d.entityId);
+                  if (i.payload && typeof i.payload.value === 'boolean') state = i.payload.value ? ' [ON]' : ' [OFF]';
+                } catch { /* entity unreachable — omit state */ }
+              }
+              parts.push(`${d.name || d.entityId}${state}`);
+            }
+            let line = parts.join(', ');
+            if (line.length > 110) line = line.slice(0, 109) + '…';
+            await bridge.sendTeamMessage(`RAIDAR: ${devices.length} device(s): ${line}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!switch') {
+            const name = text.trim().split(/\s+/).slice(1).join(' ').toLowerCase();
+            if (!name) { await bridge.sendTeamMessage('RAIDAR: usage !switch <name>').catch(() => {}); return; }
+            const switches = (((tenants.get(guildId) && tenants.get(guildId).devices) || []).filter((d) => d.type === 1));
+            const dev = switches.find((d) => (d.name || '').toLowerCase().includes(name));
+            if (!dev) { await bridge.sendTeamMessage(`RAIDAR: no switch matching "${name}"`).catch(() => {}); return; }
+            let cur = false;
+            try { const i = await bridge.getEntityInfo(dev.entityId); cur = !!(i.payload && i.payload.value); } catch { /* assume off */ }
+            try {
+              await bridge.setSwitch(dev.entityId, !cur);
+              await bridge.sendTeamMessage(`RAIDAR: ${dev.name || dev.entityId} → ${!cur ? 'ON' : 'OFF'}`).catch(() => {});
+            } catch {
+              await bridge.sendTeamMessage(`RAIDAR: failed to toggle ${dev.name || dev.entityId}`).catch(() => {});
+            }
+            return;
+          }
+
+          if (token === '!seed' || token === '!map') {
+            const info = await bridge.getInfo();
+            await bridge.sendTeamMessage(`RAIDAR: ${info.mapSize}m · seed ${info.seed}`).catch(() => {});
+            return;
+          }
+
+          if (token === '!queue') {
+            const info = await bridge.getInfo();
+            await bridge.sendTeamMessage(`RAIDAR: ${info.queuedPlayers || 0} queued`).catch(() => {});
+            return;
+          }
+
           if (token === '!help') {
-            await bridge.sendTeamMessage('RAIDAR: !check !pop !online !time !sun !wipe !team !grid !cargo !heli !vendor !events !loot !status').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !check !pop !queue !online !team !grid !status').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !time !sun !wipe !cargo !heli !vendor !crates !events').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !devices !switch <name> !seed !loot <crate>').catch(() => {});
             return;
           }
         } catch (e) {

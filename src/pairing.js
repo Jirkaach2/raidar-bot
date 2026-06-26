@@ -9,6 +9,7 @@ const manager = require('./manager');
 const alerts = require('./alerts');
 
 const ACCENT = 0xce422b;
+const BLANK = '\u200b';
 
 /**
  * HTTP API the Raidar desktop app talks to. Linking is app-only (the app holds
@@ -60,16 +61,52 @@ function parseContent(content) {
   if (m) return { emoji: (m[1] || '').trim(), title: m[2].trim(), desc: m[3].trim() };
   return { emoji: '', title: '', desc: String(content || '').trim() };
 }
-function buildNotifyEmbed(feature, content, fields, serverName) {
-  const st = FEATURE_STYLE[feature] || { c: ACCENT, a: 'RAIDAR ALERT' };
-  const p = parseContent(content);
-  const embed = new EmbedBuilder().setColor(st.c).setAuthor({ name: st.a }).setTimestamp()
-    .setFooter({ text: `${serverName || 'Raidar'} · Real-time Monitoring` });
-  if (p.title) embed.setTitle(`${p.emoji ? p.emoji + ' ' : ''}${p.title}`.slice(0, 256));
-  embed.setDescription((p.desc ? `>>> ${p.desc}` : (content || '\u200b')).slice(0, 4096));
-  if (Array.isArray(fields) && fields.length) {
-    embed.addFields(fields.slice(0, 10).map((f) => ({ name: String(f.name || '\u200b').slice(0, 256), value: String(f.value || '\u200b').slice(0, 1024), inline: !!f.inline })));
+/**
+ * Render the app-supplied `fields` as a clean two-column grid that mirrors the
+ * raid-alert box. Discord packs up to three inline fields per row, so after
+ * every pair we push a blank inline spacer to force an exact 2-col layout — and
+ * when the count is odd we pad the final row with a blank cell + spacer so it
+ * stays aligned. Field names/values are kept verbatim (just length-clamped).
+ */
+function buildGridFields(fields) {
+  const list = (Array.isArray(fields) ? fields : []).filter((f) => f && (f.name || f.value)).slice(0, 12);
+  if (!list.length) return [];
+  const out = [];
+  for (let i = 0; i < list.length; i += 2) {
+    const a = list[i];
+    const b = list[i + 1];
+    out.push({ name: String(a.name || BLANK).slice(0, 256), value: String(a.value || BLANK).slice(0, 1024), inline: true });
+    out.push(b
+      ? { name: String(b.name || BLANK).slice(0, 256), value: String(b.value || BLANK).slice(0, 1024), inline: true }
+      : { name: BLANK, value: BLANK, inline: true });
+    out.push({ name: BLANK, value: BLANK, inline: true }); // spacer → forces 2 columns
   }
+  return out;
+}
+
+/**
+ * Build a polished, professional embed for every NON-alarm notification type,
+ * styled to match alerts.buildAlertEmbed: per-feature accent colour, an emoji
+ * author line (e.g. "🚢  CARGO SHIP"), a bold parsed title, a ">>>"-quoted
+ * description, a tidy 2-column fielded grid, an optional thumbnail, and a
+ * footer with a subtle right-side "● LIVE" accent + timestamp.
+ */
+function buildNotifyEmbed(feature, content, fields, serverName) {
+  const st = FEATURE_STYLE[feature] || { c: ACCENT, a: 'RAIDAR ALERTS SERVICE' };
+  const p = parseContent(content);
+
+  const embed = new EmbedBuilder()
+    .setColor(st.c)
+    .setAuthor({ name: st.a })
+    .setTitle(`${p.emoji ? p.emoji + ' ' : ''}${p.title || st.a}`.slice(0, 256))
+    .setDescription((p.desc ? `>>> ${p.desc}` : (String(content || '').trim() || BLANK)).slice(0, 4096))
+    .setFooter({ text: `${serverName || 'Raidar'} • Real-time Monitoring        ● LIVE` })
+    .setTimestamp();
+
+  const grid = buildGridFields(fields);
+  if (grid.length) embed.addFields(grid);
+  if (st.t) embed.setThumbnail(st.t);
+
   return embed;
 }
 
