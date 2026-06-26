@@ -394,7 +394,7 @@ class Manager {
             return;
           }
 
-          if (token === '!seed' || token === '!map') {
+          if (token === '!map') {
             const info = await bridge.getInfo();
             await bridge.sendTeamMessage(`RAIDAR: ${info.mapSize}m · seed ${info.seed}`).catch(() => {});
             return;
@@ -404,7 +404,7 @@ class Manager {
             await bridge.sendTeamMessage('RAIDAR: !check !pop !team !status !time !wipe').catch(() => {});
             await bridge.sendTeamMessage('RAIDAR: !cargo !heli !vendor !events !crates !deepsea').catch(() => {});
             await bridge.sendTeamMessage('RAIDAR: !oilrig !largeoilrig !vend <item> !loot <crate>').catch(() => {});
-            await bridge.sendTeamMessage('RAIDAR: !devices !switch <name> !seed').catch(() => {});
+            await bridge.sendTeamMessage('RAIDAR: !devices !switch <name> !map').catch(() => {});
             return;
           }
         } catch (e) {
